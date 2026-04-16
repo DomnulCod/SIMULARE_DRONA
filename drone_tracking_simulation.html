@@ -1,40 +1,249 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Drone Tracking Simulation</title>
-    <style>
-        body { font-family: Arial, sans-serif; background-color: #f4f4f4; }
-        #map { height: 600px; width: 100%; }
-    </style>
-    <script src="https://api.mapbox.com/mapbox-gl-js/v2.3.1/mapbox-gl.js"></script>
-    <link href="https://api.mapbox.com/mapbox-gl-js/v2.3.1/mapbox-gl.css" rel="stylesheet" />
-</head>
-<body>
-    <h1>Drone Tracking Simulation</h1>
-    <div id="map"></div>
-    <script>
-        mapboxgl.accessToken = 'YOUR_MAPBOX_ACCESS_TOKEN';
-        const map = new mapboxgl.Map({
-            container: 'map',
-            style: 'mapbox://styles/mapbox/streets-v11',
-            center: [-74.5, 40], // starting position [lng, lat]
-            zoom: 9 // starting zoom
-        });
 
-        const droneMarker = new mapboxgl.Marker()
-            .setLngLat([-74.5, 40])
-            .addTo(map);
+<h2 class="sr-only">Interactive drone tracking simulation showing how HuskyLens detects and ESP32 controls the drone to follow a person</h2>
+<style>
+  .sim-wrap { padding: 1rem 0; }
+  .sim-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .sim-panel { background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); padding: 1rem; }
+  .sim-label { font-size: 12px; color: var(--color-text-secondary); margin: 0 0 8px; font-weight: 500; }
+  .cam-view { position: relative; width: 100%; aspect-ratio: 320/240; background: #1a1a2e; border-radius: 8px; overflow: hidden; }
+  .cam-grid { position: absolute; inset: 0; background: repeating-linear-gradient(0deg, transparent, transparent 19.9%, rgba(0,180,216,0.08) 20%), repeating-linear-gradient(90deg, transparent, transparent 19.9%, rgba(0,180,216,0.08) 20%); }
+  .cam-cross-h, .cam-cross-v { position: absolute; background: rgba(0,180,216,0.3); }
+  .cam-cross-h { width: 100%; height: 1px; top: 50%; }
+  .cam-cross-v { height: 100%; width: 1px; left: 50%; }
+  .person-box { position: absolute; border: 2px solid #06D6A0; transition: all 0.15s ease; }
+  .person-body { position: absolute; inset: 4px; background: rgba(6,214,160,0.08); border-radius: 4px; display: flex; align-items: center; justify-content: center; }
+  .person-icon { font-size: 11px; color: #06D6A0; font-family: var(--font-mono); }
+  .bbox-label { position: absolute; top: -18px; left: 0; font-size: 10px; font-family: var(--font-mono); color: #06D6A0; background: rgba(6,214,160,0.15); padding: 1px 6px; border-radius: 3px; white-space: nowrap; }
+  .cam-info { position: absolute; bottom: 6px; left: 6px; font-size: 10px; font-family: var(--font-mono); color: rgba(0,180,216,0.7); }
+  .cam-info-r { position: absolute; bottom: 6px; right: 6px; font-size: 10px; font-family: var(--font-mono); color: rgba(251,191,36,0.7); }
+  .drone-view { position: relative; width: 100%; aspect-ratio: 320/240; background: #0f172a; border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+  .drone-svg { width: 80%; height: 80%; }
+  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+  .stat { background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 8px 12px; }
+  .stat-val { font-size: 18px; font-weight: 500; font-family: var(--font-mono); }
+  .stat-lbl { font-size: 11px; color: var(--color-text-secondary); margin-top: 2px; }
+  .ctrl-bar { display: flex; align-items: center; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
+  .ctrl-bar label { font-size: 13px; color: var(--color-text-secondary); }
+  .status-line { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .status-pill { font-size: 11px; padding: 3px 10px; border-radius: 12px; font-family: var(--font-mono); }
+  .pill-ok { background: rgba(5,150,105,0.12); color: #059669; }
+  .pill-warn { background: rgba(217,119,6,0.12); color: #D97706; }
+  .pill-act { background: rgba(0,119,182,0.12); color: #0077B6; }
+  .arrow-ind { position: absolute; font-size: 28px; color: rgba(251,191,36,0.6); font-weight: 500; transition: opacity 0.2s; pointer-events: none; }
+  .log-box { background: #0D1117; border-radius: 8px; padding: 8px 12px; margin-top: 12px; height: 80px; overflow-y: auto; font-size: 10px; font-family: var(--font-mono); color: #8B9DC3; line-height: 1.6; }
+</style>
 
-        // Simulate drone movement
-        let lng = -74.5;
-        let lat = 40;
-        setInterval(() => {
-            lng += (Math.random() - 0.5) * 0.01;
-            lat += (Math.random() - 0.5) * 0.01;
-            droneMarker.setLngLat([lng, lat]);
-        }, 1000);
-    </script>
-</body>
-</html>
+<div class="sim-wrap">
+  <div class="sim-grid">
+    <div class="sim-panel">
+      <p class="sim-label">HuskyLens Pro — camera view (320x240)</p>
+      <div class="cam-view" id="camView">
+        <div class="cam-grid"></div>
+        <div class="cam-cross-h"></div>
+        <div class="cam-cross-v"></div>
+        <div class="person-box" id="personBox">
+          <div class="bbox-label" id="bboxLabel">ID:1</div>
+          <div class="person-body"><span class="person-icon">PERSOANA</span></div>
+        </div>
+        <div class="arrow-ind" id="arrowL" style="left:8px;top:45%;opacity:0">&#8592;</div>
+        <div class="arrow-ind" id="arrowR" style="right:8px;top:45%;opacity:0">&#8594;</div>
+        <div class="arrow-ind" id="arrowU" style="left:47%;top:8px;opacity:0">&#8593;</div>
+        <div class="arrow-ind" id="arrowD" style="left:47%;bottom:8px;opacity:0">&#8595;</div>
+        <div class="cam-info" id="camInfo">320x240 @ 30fps</div>
+        <div class="cam-info-r" id="mspInfo">MSP: idle</div>
+      </div>
+      <div class="stat-grid">
+        <div class="stat"><div class="stat-val" id="xVal" style="color:#0077B6">160</div><div class="stat-lbl">xCenter</div></div>
+        <div class="stat"><div class="stat-val" id="yVal" style="color:#059669">120</div><div class="stat-lbl">yCenter</div></div>
+        <div class="stat"><div class="stat-val" id="wVal" style="color:#D97706">80</div><div class="stat-lbl">width (distanta)</div></div>
+        <div class="stat"><div class="stat-val" id="rollVal" style="color:#7C3AED">1500</div><div class="stat-lbl">Roll (comanda)</div></div>
+      </div>
+    </div>
+
+    <div class="sim-panel">
+      <p class="sim-label">ESP32 — starea dronei</p>
+      <div class="drone-view">
+        <svg class="drone-svg" viewBox="0 0 200 200">
+          <g id="droneBody" style="transform-origin:100px 100px;transition:transform 0.3s ease">
+            <line x1="60" y1="60" x2="140" y2="140" stroke="#4B5563" stroke-width="3"/>
+            <line x1="140" y1="60" x2="60" y2="140" stroke="#4B5563" stroke-width="3"/>
+            <circle id="m1" cx="60" cy="60" r="16" fill="none" stroke="#0077B6" stroke-width="2"/>
+            <circle id="m2" cx="140" cy="60" r="16" fill="none" stroke="#0077B6" stroke-width="2"/>
+            <circle id="m3" cx="60" cy="140" r="16" fill="none" stroke="#0077B6" stroke-width="2"/>
+            <circle id="m4" cx="140" cy="140" r="16" fill="none" stroke="#0077B6" stroke-width="2"/>
+            <text x="60" y="64" text-anchor="middle" fill="#6B7280" font-size="9" font-family="monospace">M1</text>
+            <text x="140" y="64" text-anchor="middle" fill="#6B7280" font-size="9" font-family="monospace">M2</text>
+            <text x="60" y="144" text-anchor="middle" fill="#6B7280" font-size="9" font-family="monospace">M3</text>
+            <text x="140" y="144" text-anchor="middle" fill="#6B7280" font-size="9" font-family="monospace">M4</text>
+            <rect x="82" y="82" width="36" height="36" rx="6" fill="#1E293B" stroke="#00B4D8" stroke-width="1.5"/>
+            <text x="100" y="104" text-anchor="middle" fill="#00B4D8" font-size="10" font-weight="500" font-family="monospace">FC</text>
+            <polygon points="100,42 96,52 104,52" fill="#FBBF24" opacity="0.7"/>
+            <text x="100" y="38" text-anchor="middle" fill="#FBBF24" font-size="8" font-family="monospace">FRONT</text>
+          </g>
+        </svg>
+      </div>
+      <div class="status-line" id="statusLine">
+        <span class="status-pill pill-ok">sistem: standby</span>
+      </div>
+      <div class="log-box" id="logBox">
+        [init] Sistem pornit. Astept detectie...<br>
+      </div>
+    </div>
+  </div>
+
+  <div class="ctrl-bar">
+    <button onclick="toggleSim()" id="simBtn">Porneste simularea</button>
+    <button onclick="resetSim()">Reset</button>
+    <label>Viteza persoana:</label>
+    <input type="range" min="1" max="10" value="4" id="speedSlider" style="width:120px" oninput="personSpeed=+this.value">
+    <label>Scenariu:</label>
+    <select id="scenarioSel" onchange="setScenario(this.value)" style="padding:4px 8px;border-radius:6px;border:0.5px solid var(--color-border-secondary);background:var(--color-background-primary);font-size:13px">
+      <option value="wander">Persoana se plimba</option>
+      <option value="left">Merge la stanga</option>
+      <option value="right">Merge la dreapta</option>
+      <option value="away">Se indeparteaza</option>
+      <option value="approach">Se apropie</option>
+      <option value="circle">Se misca in cerc</option>
+    </select>
+  </div>
+</div>
+
+<script>
+let running = false, personSpeed = 4, scenario = 'wander';
+let px = 160, py = 120, pw = 80, ph = 100;
+let targetPx = 160, targetPy = 120, targetPw = 80;
+let roll = 1500, pitch = 1500;
+let wanderTimer = 0, circleAngle = 0;
+const camW = 320, camH = 240;
+
+function setScenario(v) { scenario = v; }
+
+function toggleSim() {
+  running = !running;
+  document.getElementById('simBtn').textContent = running ? 'Opreste' : 'Porneste simularea';
+  if (running) { addLog('[start] Simulare pornita — urmarire activa'); requestAnimationFrame(tick); }
+  else addLog('[stop] Simulare oprita');
+}
+
+function resetSim() {
+  px=160; py=120; pw=80; ph=100; roll=1500; pitch=1500;
+  wanderTimer=0; circleAngle=0;
+  updateUI();
+  addLog('[reset] Pozitie resetata la centru');
+}
+
+function addLog(msg) {
+  const box = document.getElementById('logBox');
+  box.innerHTML += msg + '<br>';
+  box.scrollTop = box.scrollHeight;
+}
+
+let lastLog = 0;
+function tick(ts) {
+  if (!running) return;
+  
+  // Move person based on scenario
+  switch(scenario) {
+    case 'wander':
+      wanderTimer++;
+      if (wanderTimer % 60 === 0) { targetPx = 40 + Math.random()*240; targetPw = 50 + Math.random()*80; }
+      break;
+    case 'left': targetPx = Math.max(30, targetPx - personSpeed * 0.3); break;
+    case 'right': targetPx = Math.min(290, targetPx + personSpeed * 0.3); break;
+    case 'away': targetPw = Math.max(20, targetPw - personSpeed * 0.1); break;
+    case 'approach': targetPw = Math.min(180, targetPw + personSpeed * 0.1); break;
+    case 'circle':
+      circleAngle += personSpeed * 0.01;
+      targetPx = 160 + Math.cos(circleAngle) * 100;
+      targetPw = 80 + Math.sin(circleAngle) * 30;
+      break;
+  }
+  
+  // Smooth interpolation
+  px += (targetPx - px) * 0.05 * personSpeed;
+  pw += (targetPw - pw) * 0.03 * personSpeed;
+  ph = pw * 1.3;
+  
+  // Wrap/clamp
+  if (targetPx < 20) targetPx = 280;
+  if (targetPx > 300) targetPx = 40;
+  
+  // ESP32 decision logic (exact same as real code)
+  roll = 1500; pitch = 1500;
+  let rollAction = 'centrat', pitchAction = 'hover';
+  
+  if (px < 140) { roll = 1400; rollAction = 'stanga'; }
+  else if (px > 180) { roll = 1600; rollAction = 'dreapta'; }
+  
+  if (pw < 60) { pitch = 1600; pitchAction = 'inainte'; }
+  else if (pw > 100) { pitch = 1400; pitchAction = 'inapoi'; }
+  
+  updateUI();
+  
+  // Log periodically
+  if (ts - lastLog > 2000) {
+    lastLog = ts;
+    addLog(`[msp] Roll=${roll} Pitch=${pitch} | x=${Math.round(px)} w=${Math.round(pw)}`);
+  }
+  
+  requestAnimationFrame(tick);
+}
+
+function updateUI() {
+  const camEl = document.getElementById('camView');
+  const cw = camEl.offsetWidth, ch = camEl.offsetHeight;
+  const sx = cw/camW, sy = ch/camH;
+  
+  // Person bounding box
+  const box = document.getElementById('personBox');
+  const bx = (px - pw/2) * sx, by = (py - ph/2) * sy;
+  box.style.left = bx + 'px';
+  box.style.top = by + 'px';
+  box.style.width = pw * sx + 'px';
+  box.style.height = ph * sy + 'px';
+  
+  // Label
+  document.getElementById('bboxLabel').textContent = `ID:1 x:${Math.round(px)} w:${Math.round(pw)}`;
+  
+  // Direction arrows
+  document.getElementById('arrowL').style.opacity = roll < 1500 ? 0.8 : 0;
+  document.getElementById('arrowR').style.opacity = roll > 1500 ? 0.8 : 0;
+  document.getElementById('arrowU').style.opacity = pitch > 1500 ? 0.8 : 0;
+  document.getElementById('arrowD').style.opacity = pitch < 1500 ? 0.8 : 0;
+  
+  // Stats
+  document.getElementById('xVal').textContent = Math.round(px);
+  document.getElementById('yVal').textContent = Math.round(py);
+  document.getElementById('wVal').textContent = Math.round(pw);
+  document.getElementById('rollVal').textContent = roll;
+  document.getElementById('mspInfo').textContent = `MSP: R${roll} P${pitch}`;
+  
+  // Drone tilt
+  const tiltX = (roll - 1500) / 10;
+  const tiltY = (pitch - 1500) / 10;
+  document.getElementById('droneBody').style.transform = `rotate(${tiltX}deg) perspective(200px) rotateX(${tiltY}deg)`;
+  
+  // Motor colors
+  const colors = ['#0077B6','#0077B6','#0077B6','#0077B6'];
+  if (roll < 1500) { colors[1]='#FBBF24'; colors[3]='#FBBF24'; }
+  if (roll > 1500) { colors[0]='#FBBF24'; colors[2]='#FBBF24'; }
+  if (pitch > 1500) { colors[2]='#FBBF24'; colors[3]='#FBBF24'; }
+  if (pitch < 1500) { colors[0]='#FBBF24'; colors[1]='#FBBF24'; }
+  ['m1','m2','m3','m4'].forEach((id,i) => document.getElementById(id).setAttribute('stroke', colors[i]));
+  
+  // Status pills
+  const pills = [];
+  if (roll < 1500) pills.push('<span class="status-pill pill-act">Roll: STANGA</span>');
+  else if (roll > 1500) pills.push('<span class="status-pill pill-act">Roll: DREAPTA</span>');
+  else pills.push('<span class="status-pill pill-ok">Roll: centrat</span>');
+  
+  if (pitch > 1500) pills.push('<span class="status-pill pill-warn">Pitch: INAINTE</span>');
+  else if (pitch < 1500) pills.push('<span class="status-pill pill-warn">Pitch: INAPOI</span>');
+  else pills.push('<span class="status-pill pill-ok">Pitch: hover</span>');
+  
+  pills.push(`<span class="status-pill" style="background:rgba(0,180,216,0.1);color:#00B4D8">20Hz</span>`);
+  document.getElementById('statusLine').innerHTML = pills.join('');
+}
+
+updateUI();
+</script>
